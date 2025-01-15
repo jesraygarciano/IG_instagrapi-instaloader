@@ -1,0 +1,13 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.env
+
+# Instaloader downloaded media
+data/downloads/
+
+# OS / Editor
+.DS_Store
