@@ -174,7 +174,7 @@ def random_delay(min_sec=3, max_sec=7):
 def main():
     # Example target users
     # In practice, read from a file, DB, or pass as arguments
-    target_usernames = ["instagram", "natgeo", "github", "nytimes"]
+    target_usernames = ["instagram"] #["instagram", "natgeo", "github", "nytimes"]
 
     # 1) Initialize sessions
     cl = init_instagrapi_session("ig_settings.json")
