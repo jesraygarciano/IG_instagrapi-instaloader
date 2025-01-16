@@ -10,6 +10,7 @@ venv/
 data/downloads/
 data/results/
 data/target_usernames/
+data/media_data/
 
 # OS / Editor
 .DS_Store
