@@ -8,6 +8,7 @@ venv/
 
 # Instaloader downloaded media
 data/downloads/
+data/target_usernames/
 
 # OS / Editor
 .DS_Store
