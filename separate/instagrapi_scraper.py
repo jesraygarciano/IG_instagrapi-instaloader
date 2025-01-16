@@ -11,10 +11,23 @@ IG_PASSWORD = os.getenv("IG_PASSWORD")
 def scrape_instagrapi(username_to_scrape):
     cl = Client()
 
-    # Login to retrieve private or more detailed data
-    cl.login(IG_USERNAME, IG_PASSWORD)
+    # Start the login process
+    try:
+        cl.login(IG_USERNAME, IG_PASSWORD)
+    except Exception as e:
+        # If 2FA is required, Instagrapi raises TwoFactorRequired.
+        # Here, we catch that exception and retry with a verification code.
+        if "TwoFactorRequired" in str(e):
+            print("Two-factor authentication required.")
+            # Prompt for your 2FA code (6-digit code from text message or authenticator)
+            verification_code = input("Enter your 2FA verification code: ")
 
-    # Retrieve user info
+            # The 'verification_code' parameter is used to complete the 2FA login.
+            cl.login(IG_USERNAME, IG_PASSWORD, verification_code=verification_code)
+        else:
+            raise e
+
+    # Now you're logged in with Instagrapi
     user_info = cl.user_info_by_username(username_to_scrape)
     print("Profile Info")
     print("------------")
@@ -25,7 +38,7 @@ def scrape_instagrapi(username_to_scrape):
     print(f"Following: {user_info.following_count}")
     print("")
 
-    # Retrieve user feed (posts)
+    # Retrieve some user posts (feed)
     print("Recent Posts")
     print("------------")
     user_id = user_info.pk
@@ -36,11 +49,12 @@ def scrape_instagrapi(username_to_scrape):
         print(f"Like Count: {media.like_count}")
         print(f"Comment Count: {media.comment_count}")
 
-        # For videos (media_type == 2), you can retrieve view count
+        # View count if it's a video (media_type=2)
         if media.media_type == 2:
             print(f"View Count: {media.video_view_count}")
         print("------------")
 
 if __name__ == "__main__":
-    username_to_scrape = "instagram"  # change to your target username
+    # Change to whichever username you want to scrape
+    username_to_scrape = "instagram"
     scrape_instagrapi(username_to_scrape)
