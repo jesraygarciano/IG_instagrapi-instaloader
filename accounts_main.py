@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main.py
+accounts_main.py
 
 - Reads "item_accounts_rows.csv" from data/target_usernames to get IG usernames.
 - For each username, randomly pick Instagrapi or Instaloader:
