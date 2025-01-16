@@ -6,8 +6,11 @@ main.py
 - For each username, randomly pick Instagrapi or Instaloader:
   - Fetch user info: name (full_name), bio, avatar (profile pic), #followers, #followings
   - Fetch up to N posts: caption, date, views (if available), likes, comments
-- Combine the results into a single JSON file in data/results/instagram_users.json
+- After each user's data is scraped, the script immediately saves partial results to data/results/instagram_users.json
+  => So if the script stops, you'll still have the data for previously-scraped users.
 - Maintains 2FA login for both libraries, storing sessions to avoid repeated logins.
+- Fix: Convert any non-serializable fields (like 'HttpUrl') to string.
+- Fix #2: Use `.replace(...)` on Windows to overwrite the file.
 """
 
 import os
@@ -16,6 +19,7 @@ import time
 import random
 import csv
 import json
+import uuid  # for a unique temp file name
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -29,9 +33,6 @@ from instagrapi.exceptions import LoginRequired, TwoFactorRequired
 import instaloader
 from instaloader import Instaloader, Profile, Post
 from instaloader.exceptions import TwoFactorAuthRequiredException
-
-# Optional (requests for fallback)
-import requests
 
 ############################
 # 1) Environment / Config
@@ -91,7 +92,8 @@ def init_instagrapi_session(session_path: str = "data/ig_settings.json") -> IGCl
 
 def fetch_user_info_instagrapi(cl: IGClient, username: str, max_posts=3) -> Dict:
     """
-    Fetch user profile info + up to `max_posts` details using Instagrapi.
+    Fetch user profile info + up to `max_posts` details using Instagrapi,
+    converting all non-serializable fields (like HttpUrl) to string.
     """
     result = {
         "username": username,
@@ -100,31 +102,34 @@ def fetch_user_info_instagrapi(cl: IGClient, username: str, max_posts=3) -> Dict
         "posts": [],
     }
 
-    # 1) user info
+    # Attempt the user info request
     user_data = cl.user_info_by_username(username)
+
+    # Convert the profile_pic_url to a string if it's an HttpUrl
+    pic_url_str = str(user_data.profile_pic_url) if user_data.profile_pic_url else None
+
     result["user_info"] = {
         "full_name": user_data.full_name,
         "bio": user_data.biography,
-        "profile_pic_url": user_data.profile_pic_url,
+        "profile_pic_url": pic_url_str,
         "follower_count": user_data.follower_count,
         "following_count": user_data.following_count,
     }
 
-    # 2) fetch up to max_posts from the user feed
+    # For user posts
     user_id = user_data.pk
-    medias = cl.user_medias(user_id, max_posts)  # quick fetch
+    medias = cl.user_medias(user_id, max_posts)
     for m in medias:
-        # For posts that are *videos*, instagrapi has .view_count
         view_count = None
         if m.media_type == 2:  # video
-            # instagrapi calls it m.video_view_count in many versions
             view_count = getattr(m, "video_view_count", None)
 
-        # For a carousel, you might gather subitems, etc.
-        # For a single post (photo or video), we have .taken_at, .comment_count, etc.
+        # date_of_publication => cast to str
+        date_str = m.taken_at.isoformat() if m.taken_at else None
+
         post_entry = {
             "description": m.caption_text,
-            "date_of_publication": str(m.taken_at),
+            "date_of_publication": date_str,
             "view_count": view_count,
             "like_count": m.like_count,
             "comment_count": m.comment_count,
@@ -177,8 +182,7 @@ def init_instaloader_session(session_dir: str = "data/sessions") -> Instaloader:
 def fetch_user_info_instaloader(L: Instaloader, username: str, max_posts=3) -> Dict:
     """
     Fetch user profile + up to N posts via Instaloader.
-    Note: Instaloader can get post likes, comments, but
-    'view count' is only for videos, and is not always guaranteed accessible.
+    Convert any non-serializable fields to strings before returning.
     """
     result = {
         "username": username,
@@ -188,10 +192,13 @@ def fetch_user_info_instaloader(L: Instaloader, username: str, max_posts=3) -> D
     }
 
     profile = Profile.from_username(L.context, username)
+
+    pic_url_str = str(profile.profile_pic_url) if profile.profile_pic_url else None
+
     result["user_info"] = {
         "full_name": profile.full_name,
         "bio": profile.biography,
-        "profile_pic_url": profile.profile_pic_url,
+        "profile_pic_url": pic_url_str,
         "follower_count": profile.followers,
         "following_count": profile.followees,
     }
@@ -200,13 +207,12 @@ def fetch_user_info_instaloader(L: Instaloader, username: str, max_posts=3) -> D
     for post in profile.get_posts():
         if count >= max_posts:
             break
-        # post is an instance of `Post`
-        # Instaloader doesn't always supply 'view_count' for normal feed posts,
-        # but we can do post.video_view_count if it's a video:
         view_count = getattr(post, "video_view_count", None)
+        date_str = post.date_local.isoformat() if post.date_local else None
+
         post_entry = {
             "description": post.caption,
-            "date_of_publication": str(post.date_local),
+            "date_of_publication": date_str,
             "view_count": view_count,
             "like_count": post.likes,
             "comment_count": post.comments,
@@ -226,6 +232,19 @@ def random_delay(min_sec=3, max_sec=7):
     time.sleep(delay)
 
 
+def save_results_atomic(results_list: List[Dict], out_file: Path):
+    """
+    Write the results to a temp file then use `.replace(...)`,
+    which on Windows will overwrite the existing file safely.
+    """
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = out_file.parent / f".tmp_{uuid.uuid4().hex}.json"
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(results_list, f, indent=2, ensure_ascii=False)
+    # Use 'replace()' instead of 'rename()' to avoid FileExistsError on Windows:
+    temp_file.replace(out_file)
+
+
 def main():
     # 0) Load CSV from data/target_usernames/item_accounts_rows.csv
     csv_path = Path("data/target_usernames/item_accounts_rows.csv")
@@ -233,10 +252,6 @@ def main():
         print(f"[ERROR] CSV file not found: {csv_path}")
         sys.exit(1)
 
-    # We'll parse the 'name' column as the IG handle
-    # item_accounts_rows.csv has a header:
-    #   id,app_id,name,app_unique_id,created_at,updated_at,display_name,...
-    # We'll store them in a list of usernames
     target_usernames = []
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -249,16 +264,20 @@ def main():
         print("[WARN] No IG usernames found in CSV.")
         sys.exit(0)
 
-    # 1) Initialize sessions (both Instagrapi & Instaloader)
+    # 1) Initialize sessions
     cl = init_instagrapi_session("data/ig_settings.json")
     L = init_instaloader_session("data/sessions")
 
-    # We'll store results in a list of dict
-    all_results = []
+    # We'll store results in a list
+    all_results: List[Dict] = []
 
-    # 2) For each username, pick library
+    # The final file
+    results_dir = Path("data/results")
+    out_json = results_dir / "instagram_users.json"
+
+    # 2) Process each username
     for username in target_usernames:
-        random_delay()  # reduce block risk
+        random_delay()
 
         pick = random.choice(["instagrapi", "instaloader"])
         print(f"\n===== Processing {username} via {pick} =====")
@@ -270,25 +289,18 @@ def main():
                 user_data = fetch_user_info_instaloader(L, username, max_posts=3)
         except Exception as e:
             print(f"[ERROR] Failed to fetch data for {username}: {e}")
-            # We can store a partial or skip
             continue
 
-        # Append to all_results
         all_results.append(user_data)
 
-        # Possibly add another random delay
+        # **Immediately** save partial results
+        save_results_atomic(all_results, out_json)
+        print(f"[INFO] Intermediate results saved ({len(all_results)} total so far).")
+
         random_delay()
 
-    # 3) Save to JSON inside data/results
-    results_dir = Path("data/results")
-    results_dir.mkdir(parents=True, exist_ok=True)
-    out_json = results_dir / "instagram_users.json"
-
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=2, ensure_ascii=False)
-
-    print(f"\n[INFO] Results saved to: {out_json}")
-    print("Done. Exiting.")
+    print(f"\n[INFO] Final results saved to: {out_json}")
+    print("All tasks done. Exiting.")
 
 
 if __name__ == "__main__":
